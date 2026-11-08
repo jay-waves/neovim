@@ -1,0 +1,25 @@
+# Neovim temporary files and local state
+*.swp
+*.swo
+*~
+Session.vim
+Sessionx.vim
+*.shada
+*.shada.tmp.*
+*.log
+/cache/
+/state/
+/data/
+
+# Machine-specific overrides and secrets
+/.env
+/.env.*
+!/.env.example
+/local.lua
+/lua/local.lua
+/lua/local/
+
+# OS metadata
+.DS_Store
+Thumbs.db
+Desktop.ini

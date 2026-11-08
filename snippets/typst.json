@@ -1,0 +1,78 @@
+{
+  "Figure": {
+    "prefix": "!fig",
+    "body": [
+      "#figure(",
+      "  image(\"image.png\", width: 80%),",
+      "  caption: [Caption],",
+      ")"
+    ]
+  },
+
+  "Table figure": {
+    "prefix": "!tab",
+    "body": [
+      "#figure(",
+      "  table(",
+      "    columns: (1fr, 1fr),",
+      "    [A], [B],",
+      "    [1], [2],",
+      "  ),",
+      "  caption: [Caption],",
+      ")"
+    ]
+  },
+
+  "Link": {
+    "prefix": "!link",
+    "body": [
+      "#link(\"https://example.com\")[Text]"
+    ]
+  },
+
+  "Bibliography": {
+    "prefix": "!bib",
+    "body": [
+      "#bibliography(\"references.bib\")"
+    ]
+  },
+
+  "Image": {
+    "prefix": "!img",
+    "body": [
+      "#image(\"image.png\", width: 80%)"
+    ]
+  },
+
+  "Heading style": {
+    "prefix": "!hstyle",
+    "body": [
+      "#show heading.where(level: 1): set text(size: 18pt, weight: \"bold\")"
+    ]
+  },
+
+  "Import package": {
+    "prefix": "!import",
+    "body": [
+      "#import \"@preview/package:0.1.0\": *"
+    ]
+  },
+
+  "Function": {
+    "prefix": "!fn",
+    "body": [
+      "#let name(arg) = [",
+      "  Content",
+      "]"
+    ]
+  },
+
+  "Show rule": {
+    "prefix": "!show",
+    "body": [
+      "#show heading: it => [",
+      "  #it",
+      "]"
+    ]
+  }
+}

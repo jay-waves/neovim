@@ -1,0 +1,11 @@
+{
+  "Figure with source": {
+    "prefix": "!fig",
+    "body": [
+      "<figure>",
+      "  <img src=\"${1:image-url}\">",
+      "  <figcaption>Source: <a href=\"${2:source-url}\">${3:@author}</a></figcaption>",
+      "</figure>"
+    ]
+  }
+}
