@@ -1,7 +1,29 @@
 local M = {}
 
 function M.setup()
-    vim.pack.add({ "https://github.com/nvim-mini/mini.files" })
+    vim.pack.add({
+        "https://github.com/nvim-mini/mini.files",
+        "https://github.com/nvim-mini/mini-git",
+    })
+
+    local git_group = vim.api.nvim_create_augroup("PersonalMiniGit", { clear = true })
+    vim.api.nvim_create_autocmd("User", {
+        group = git_group,
+        pattern = "MiniGitUpdated",
+        callback = function(args)
+            local summary = vim.b[args.buf].minigit_summary or {}
+            local xy, mark = summary.status or "", ""
+            if xy == "??" then mark = "?"
+            elseif xy:find("U", 1, true) or xy == "AA" or xy == "DD" then mark = "U"
+            elseif xy:find("D", 1, true) then mark = "D"
+            elseif xy:find("A", 1, true) then mark = "A"
+            elseif xy:find("[MT]") then mark = "M"
+            elseif xy:find("[RC]") then mark = xy:match("[RC]")
+            end
+            vim.b[args.buf].minigit_summary_string = mark == "" and "" or (" [" .. mark .. "]")
+        end,
+    })
+    require("mini.git").setup()
 
     --> PlugIn: Mini.Files, vim-like keymap, and = to save changes
     require("mini.files").setup({

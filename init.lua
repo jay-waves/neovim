@@ -63,10 +63,13 @@ vim.keymap.set({ "n", "v" }, "<leader>p", [["+p]])
 
 -- dark themes: nordbones, github, gruvbox, zenbones, flexoki
 -- light themes: github_light, zenwritten_light, patana_light, alabaster, flexoki_light
-require("theme").setup("alabaster")
+-- Detect the Windows app theme once at startup.
+require("theme").setup({
+    dark = "gruvbox",
+    light = "alabaster",
+})
 
 vim.pack.add({
-    "https://github.com/nvim-lualine/lualine.nvim",
     "https://github.com/nvim-mini/mini.surround",
 })
 
@@ -74,39 +77,16 @@ require("cmdline").setup()
 require("picker").setup()
 require("quickfix").setup()
 require("title").setup()
-require("git").setup()
+-- require("git").setup()
 
---> PlugIn: Lualine
-require("lualine").setup({
-    options = {
-        globalstatus = true,
-    },
-    sections = {
-        lualine_a = { "mode" },
-        lualine_c = { { "filename", path = 1 } },
-        lualine_x = { "filetype" },
-        lualine_y = { "progress" },
-    },
-    tabline = {
-        lualine_a = {
-            {
-                "buffers",
-                max_length = function()
-                    return math.floor(vim.o.columns * 0.95)
-                end,
-                symbols = { modified = "*" },
-                mode = 4,
-            },
-        },
-    },
-})
+vim.opt.showtabline = 0
 
 require("files").setup()
 
 --> File picker; grep and symbols use quickfix.
 vim.keymap.set("n", "<leader>f", ":Files<CR>", { desc = "Find files" })
-vim.keymap.set("n", "<leader>/", ":GrepQf ", { desc = "Search contents into quickfix" })
-vim.keymap.set("n", "<leader>b", ":b", { desc = "Buffer command" })
+vim.keymap.set("n", "<leader>/", ":Grep ", { desc = "Search contents into quickfix" })
+vim.keymap.set("n", "<leader>b", function() require("buffers").open() end, { desc = "Choose buffer" })
 
 -- Toggle between splits inside windows
 vim.keymap.set("n", "<leader>w", "<C-w>w")

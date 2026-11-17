@@ -278,13 +278,11 @@ end
 
 
 function M.setup()
-    for _, name in ipairs({ "GrepQf", "Grep" }) do
-        vim.api.nvim_create_user_command(name, function(args)
-            local pattern, globs = parse_grep(args.args)
-            if not pattern then vim.notify(globs, vim.log.levels.ERROR); return end
-            grep(pattern, globs)
-        end, { nargs = "+", desc = "Search cwd into quickfix: [-g glob ...] [--] regex" })
-    end
+    vim.api.nvim_create_user_command("Grep", function(args)
+        local pattern, globs = parse_grep(args.args)
+        if not pattern then vim.notify(globs, vim.log.levels.ERROR); return end
+        grep(pattern, globs)
+    end, { nargs = "+", desc = "Search cwd into quickfix: [-g glob ...] [--] regex" })
 
     for name, kind in pairs({ Files = "files", Oldfiles = "oldfiles" }) do
         api.nvim_create_user_command(name, function(args)

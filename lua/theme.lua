@@ -30,19 +30,19 @@ local themes = {
     github = {
         name = "github_dark_tritanopia",
         module = "github-theme",
-        options = { options = { transparent = true } },
+        options = { options = { transparent = false } },
     },
     gruvbox = {
         name = "gruvbox",
         module = "gruvbox",
         background = "dark",
-        options = { transparent_mode = false, contrast = "medium" },
+        options = { transparent_mode = false, contrast = "" },
     },
     gruvbox_light = {
         name = "gruvbox",
         background = "light",
         module = "gruvbox",
-        options = { transparent_mode = false, contrast = "medium" },
+        options = { transparent_mode = false, contrast = "" },
     },
     alabaster = {
         name = "alabaster",
@@ -54,13 +54,58 @@ local themes = {
     },
 }
 
-function M.setup(theme_name)
-    if type(theme_name) ~= "string" then
-        theme_name = vim.env.NVIM_THEME
-        if not theme_name or theme_name == "" then
-            theme_name = "flexoki_light"
-        end
+local function system_background()
+    if vim.fn.has("win32") ~= 1 then
+        return "dark"
     end
+
+    local ffi = require("ffi")
+    ffi.cdef[[
+        long __stdcall RegGetValueA(void *key, const char *subkey,
+            const char *value, unsigned long flags, unsigned long *type,
+            void *data, unsigned long *size);
+    ]]
+    local registry = ffi.load("advapi32")
+    local value = ffi.new("unsigned long[1]")
+    local size = ffi.new("unsigned long[1]", ffi.sizeof(value))
+    -- Sign-extended HKEY_CURRENT_USER; read only the DWORD application preference.
+    local current_user = ffi.cast("void *", ffi.cast("intptr_t", -2147483647))
+    local status = registry.RegGetValueA(current_user,
+        [[Software\Microsoft\Windows\CurrentVersion\Themes\Personalize]],
+        "AppsUseLightTheme", 0x10, nil, value, size)
+    return status == 0 and value[0] == 1 and "light" or "dark"
+end
+
+local function setup_statusline()
+    local api = vim.api
+    local function set_highlights()
+        local mode = api.nvim_get_hl(0, { name = "StatusLine", link = false })
+        mode.bold = true
+        api.nvim_set_hl(0, "StatusLineMode", mode)
+    end
+
+    vim.o.laststatus = 3
+    vim.o.showmode = false
+    vim.o.statusline = " %#StatusLineMode#%{mode()}%*  %<%f%( %m%r%)%{get(b:, 'minigit_summary_string', '')} (%{len(filter(getbufinfo(), 'v:val.listed'))})%= %y  %l:%v  %p%% "
+    local group = api.nvim_create_augroup("PersonalStatusline", { clear = true })
+    set_highlights()
+    api.nvim_create_autocmd("ColorScheme", {
+        group = group, callback = set_highlights,
+    })
+    local function redraw()
+        vim.schedule(function() vim.cmd.redrawstatus() end)
+    end
+    api.nvim_create_autocmd({ "ModeChanged", "BufAdd", "BufDelete" }, {
+        group = group, callback = redraw,
+    })
+    api.nvim_create_autocmd("OptionSet", {
+        group = group, pattern = "buflisted", callback = redraw,
+    })
+end
+
+function M.setup(config)
+    local name = config[system_background()]
+    local theme = assert(themes[name], "Unknown theme preset: " .. tostring(name))
 
     vim.g.zenbones_darkness = "warm"
 
@@ -74,12 +119,12 @@ function M.setup(theme_name)
         "https://github.com/kepano/flexoki-neovim",
     })
 
-    local theme = assert(themes[theme_name], "Unknown theme preset: " .. theme_name)
     vim.opt.background = theme.background or "dark"
     if theme.module then
         require(theme.module).setup(theme.options)
     end
     vim.cmd.colorscheme(theme.name)
+    setup_statusline()
 end
 
 return M

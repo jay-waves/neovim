@@ -56,7 +56,7 @@ function M.setup()
                 -- Prose files retain structured completion without buffer words.
                 typst = { "lsp", "path", "snippets" },
                 text = { "lsp", "path", "snippets" },
-                markdown = { inherit_default = true, "latex", },
+                markdown = { inherit_defaults = true, "latex", },
             },
         },
 
