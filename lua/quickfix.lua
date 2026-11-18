@@ -1,8 +1,23 @@
 local M = {}
 local api = vim.api
-local generation, cancel = 0, nil
 
-local function publish(title, items, query)
+local function symbol_text(info)
+    local entries = vim.fn.getqflist({ id = info.id, items = 0 }).items
+    local max_line, max_col = 0, 0
+    for _, item in ipairs(entries) do
+        max_line = math.max(max_line, item.lnum)
+        max_col = math.max(max_col, item.col)
+    end
+    local format = string.format("%%%dd:%%%dd  %%s", #tostring(max_line), #tostring(max_col))
+    local lines = {}
+    for i = info.start_idx, info.end_idx do
+        local item = entries[i]
+        lines[#lines + 1] = string.format(format, item.lnum, item.col, item.text)
+    end
+    return lines
+end
+
+local function publish(title, items, query, text_function)
     if query and query ~= "" then
         items = vim.tbl_filter(function(item)
             return (item.text or ""):lower():find(query:lower(), 1, true) ~= nil
@@ -11,7 +26,7 @@ local function publish(title, items, query)
     table.sort(items, function(a, b)
         return a.lnum < b.lnum or (a.lnum == b.lnum and a.col < b.col)
     end)
-    vim.fn.setqflist({}, " ", { title = title, items = items })
+    vim.fn.setqflist({}, " ", { title = title, items = items, quickfixtextfunc = text_function })
     if #items == 0 then
         vim.cmd("cclose")
         vim.notify("No symbols found", vim.log.levels.INFO)
@@ -29,7 +44,14 @@ local function treesitter_items(buf)
     assert(query, "No Tree-sitter locals query for " .. lang)
     local items, seen = {}, {}
     for _, tree in ipairs(parser:parse()) do
-        for id, node in query:iter_captures(tree:root(), buf, 0, -1) do
+        local root = tree:root()
+        local scopes = {}
+        for id, node in query:iter_captures(root, buf, 0, -1) do
+            if query.captures[id] == "local.scope" and node:id() ~= root:id() then
+                scopes[node:id()] = true
+            end
+        end
+        for id, node in query:iter_captures(root, buf, 0, -1) do
             local capture = query.captures[id]
             if capture == "local.definition" or capture:match("^local%.definition%.") then
                 -- Associated receivers are references, not additional declarations.
@@ -39,8 +61,25 @@ local function treesitter_items(buf)
                     if not seen[key] then
                         seen[key] = true
                         local kind = capture:match("^local%.definition%.(.+)$") or "definition"
+                        local depth, ancestor = 0, node:parent()
+                        local section_heading = kind == "heading" and (lang == "markdown" or lang == "typst")
+                        while ancestor do
+                            if section_heading and ancestor:type() == "section" then
+                                depth = depth + 1
+                            elseif not section_heading and scopes[ancestor:id()] then
+                                local name = ancestor:field("name")[1]
+                                if not name or name:id() ~= node:id() then depth = depth + 1 end
+                            end
+                            ancestor = ancestor:parent()
+                        end
+                        -- The nearest section belongs to the heading itself.
+                        if section_heading then depth = math.max(0, depth - 1) end
+                        local label = vim.treesitter.get_node_text(node, buf)
+                        if lang == "typst" and section_heading then
+                            label = label:gsub("^=+%s*", "")
+                        end
                         items[#items + 1] = { bufnr = buf, lnum = row + 1, col = col + 1,
-                            text = "[" .. kind .. "] " .. vim.treesitter.get_node_text(node, buf) }
+                            text = string.rep("    ", depth) .. "[" .. kind .. "] " .. label }
                     end
                 end
             end
@@ -51,42 +90,13 @@ local function treesitter_items(buf)
 end
 
 
-function M.open(kind, query)
-    generation = generation + 1
-    local request, source = generation, api.nvim_get_current_buf()
-    if cancel then cancel(); cancel = nil end
-    if kind == "treesitter" then
-        local ok, items = pcall(treesitter_items, source)
-        if not ok then vim.notify(tostring(items), vim.log.levels.ERROR); return end
-        publish("TreeSitter: " .. api.nvim_buf_get_name(source), items, query)
+local function open_symbols(query)
+    local ok, items = pcall(treesitter_items, api.nvim_get_current_buf())
+    if not ok then
+        vim.notify(tostring(items), vim.log.levels.ERROR)
         return
     end
-    local method = "textDocument/documentSymbol"
-    if #vim.lsp.get_clients({ bufnr = source, method = method }) == 0 then
-        vim.notify("No LSP document-symbol provider for this buffer", vim.log.levels.INFO)
-        return
-    end
-    cancel = vim.lsp.buf_request_all(source, method,
-        { textDocument = { uri = vim.uri_from_bufnr(source) } }, function(results)
-            if request ~= generation or not api.nvim_buf_is_valid(source) then return end
-            cancel = nil
-            local items, seen = {}, {}
-            for id, response in pairs(results) do
-                local client = vim.lsp.get_client_by_id(id)
-                if response.err then vim.notify(response.err.message, vim.log.levels.WARN) end
-                if client and response.result then
-                    for _, item in ipairs(vim.lsp.util.symbols_to_items(response.result, source, client.offset_encoding)) do
-                        local key = table.concat({ item.filename, item.lnum, item.col, item.text }, "\0")
-                        if not seen[key] then
-                            seen[key] = true
-                            item.bufnr = source
-                            items[#items + 1] = item
-                        end
-                    end
-                end
-            end
-            publish("Symbols: " .. api.nvim_buf_get_name(source), items, query)
-        end)
+    publish("Symbols", items, query, symbol_text)
 end
 
 function M.setup()
@@ -111,17 +121,10 @@ function M.setup()
             vim.diagnostic.setloclist({ open = true })
         end
     end, { desc = "Toggle diagnostics loclist" })
-    for name, kind in pairs({ Symbols = "symbols", TreeSitter = "treesitter" }) do
-        api.nvim_create_user_command(name, function(args) M.open(kind, args.args) end,
-            { nargs = "*", desc = "List " .. kind .. " in quickfix (optional text filter)" })
+    for _, name in ipairs({ "Symbols", "TreeSitter" }) do
+        api.nvim_create_user_command(name, function(args) open_symbols(args.args) end,
+            { nargs = "*", desc = "List Treesitter symbols in quickfix (optional text filter)" })
     end
-    api.nvim_create_autocmd("VimLeavePre", {
-        group = group,
-        callback = function()
-            generation = generation + 1
-            if cancel then cancel() end
-        end,
-    })
 end
 
 return M

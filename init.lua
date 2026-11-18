@@ -86,6 +86,8 @@ require("files").setup()
 --> File picker; grep and symbols use quickfix.
 vim.keymap.set("n", "<leader>f", ":Files<CR>", { desc = "Find files" })
 vim.keymap.set("n", "<leader>/", ":Grep ", { desc = "Search contents into quickfix" })
+vim.keymap.set("n", "<leader>s", "<Cmd>Symbols<CR>", { desc = "Show Treesitter symbols" })
+vim.keymap.set("n", "<leader>S", "<Cmd>Symbols<CR>", { desc = "Show Treesitter symbols" })
 vim.keymap.set("n", "<leader>b", function() require("buffers").open() end, { desc = "Choose buffer" })
 
 -- Toggle between splits inside windows

@@ -51,7 +51,7 @@ local function draw(s)
     for i = s.top, math.min(#s.matches, s.top + capacity - 1) do
         local item = s.matches[i]
         lines[#lines + 1] = (item.bufnr == s.current and "> " or "  ")
-            .. string.format("%-" .. s.id_width .. "s  ", "#" .. item.bufnr)
+            .. string.format("%-" .. s.id_width .. "s  ", tostring(item.bufnr))
             .. item.label .. (vim.bo[item.bufnr].modified and " [+]" or "")
     end
     if #s.matches == 0 then lines[2] = "  No matches" end
@@ -77,8 +77,8 @@ local function refresh(s)
     s.items = vim.tbl_filter(function(item)
         return api.nvim_buf_is_valid(item.bufnr) and vim.bo[item.bufnr].buflisted
     end, s.items)
-    local id = query:match("^#(%d+)$")
-    if query == "" or query == "#" then
+    local id = query:match("^(%d+)$")
+    if query == "" then
         s.matches = s.items
     elseif id then
         s.matches = vim.tbl_filter(function(item)
@@ -106,7 +106,7 @@ function M.open()
         return a.bufnr < b.bufnr
     end)
     for _, info in ipairs(infos) do
-        s.id_width = math.max(s.id_width, #tostring(info.bufnr) + 1)
+        s.id_width = math.max(s.id_width, #tostring(info.bufnr))
         local label = info.name == "" and "[No Name]"
             or vim.fn.fnamemodify(info.name, ":~:.")
         s.items[#s.items + 1] = {
@@ -141,11 +141,33 @@ function M.open()
         s.selected = (s.selected - 1 + delta) % #s.matches + 1
         draw(s)
     end
-    for _, buf in ipairs({ s.buf, s.prompt }) do
-        local function map(key, fn)
-            vim.keymap.set({ "n", "i" }, key, fn, { buffer = buf, silent = true })
+    local function search(digit)
+        api.nvim_set_current_win(s.prompt_win)
+        if digit then
+            api.nvim_buf_set_lines(s.prompt, 0, -1, false, { digit })
+            refresh(s)
         end
-        map("<Esc>", function() close(s) end)
+        local query = api.nvim_buf_get_lines(s.prompt, 0, 1, false)[1] or ""
+        api.nvim_win_set_cursor(s.prompt_win, { 1, #query })
+        vim.cmd.startinsert({ bang = true })
+    end
+    for _, buf in ipairs({ s.buf, s.prompt }) do
+        local function map(key, fn, mode)
+            vim.keymap.set(mode or { "n", "i" }, key, fn, { buffer = buf, silent = true })
+        end
+        map("<Esc>", function() close(s) end, "n")
+        map("q", function() close(s) end, "n")
+        -- Use the native mode transition so a following Esc reaches the normal map.
+        map("<Esc>", "<Esc>", "i")
+        map("j", function() move(1) end, "n")
+        map("k", function() move(-1) end, "n")
+        for _, key in ipairs({ "/", "i" }) do
+            map(key, function() search() end, "n")
+        end
+        for digit = 0, 9 do
+            local value = tostring(digit)
+            map(value, function() search(value) end, "n")
+        end
         map("<C-c>", function() close(s) end)
         map("<CR>", function() accept(s) end)
         for _, key in ipairs({ "<Down>", "<C-n>" }) do map(key, function() move(1) end) end
@@ -182,7 +204,7 @@ function M.open()
         end,
     })
     draw(s)
-    vim.cmd.startinsert()
+    vim.cmd.stopinsert()
 end
 
 return M
