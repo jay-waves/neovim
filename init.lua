@@ -5,6 +5,11 @@ vim.env.UV_THREADPOOL_SIZE = "2"
 vim.g.mapleader = " "
 vim.g.maplocalleader = " "
 
+-- The client terminal controls OSC 52 permissions. In tmux, enable set-clipboard for copying.
+if vim.fn.has("linux") == 1 and (vim.env.SSH_TTY or vim.env.SSHORE_TTY) then
+    vim.g.clipboard = "osc52"
+end
+
 require("remote").setup()
 
 ---------------------------------------------------------------------------
