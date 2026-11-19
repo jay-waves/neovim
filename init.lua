@@ -65,6 +65,18 @@ vim.keymap.set({ "n", "v" }, "<leader>y", [["+y]])
 vim.keymap.set({ "n", "v" }, "<leader>d", [["+d]])
 vim.keymap.set({ "n", "v" }, "<leader>p", [["+p]])
 
+vim.api.nvim_create_user_command("CopyLocation", function()
+    local path = vim.api.nvim_buf_get_name(0)
+    if path == "" or vim.bo.buftype ~= "" then
+        vim.notify("Current buffer has no file path", vim.log.levels.WARN)
+        return
+    end
+    local location = string.format("%s:%d", path, vim.fn.line("."))
+    if vim.fn.setreg("+", location, "v") == 0 then
+        vim.notify(location)
+    end
+end, { desc = "Copy current file path and line number" })
+
 
 -- dark themes: nordbones, github, gruvbox, zenbones, flexoki
 -- light themes: github_light, zenwritten_light, patana_light, alabaster, flexoki_light
@@ -93,7 +105,7 @@ vim.keymap.set("n", "<leader>f", ":Files<CR>", { desc = "Find files" })
 vim.keymap.set("n", "<leader>/", ":Grep ", { desc = "Search contents into quickfix" })
 vim.keymap.set("n", "<leader>s", "<Cmd>Symbols<CR>", { desc = "Show Treesitter symbols" })
 vim.keymap.set("n", "<leader>S", "<Cmd>Symbols<CR>", { desc = "Show Treesitter symbols" })
-vim.keymap.set("n", "<leader>b", function() require("buffers").open() end, { desc = "Choose buffer" })
+vim.keymap.set("n", "<leader>o", function() require("buffers").open() end, { desc = "Choose buffer" })
 
 -- Toggle between splits inside windows
 vim.keymap.set("n", "<leader>w", "<C-w>w")
