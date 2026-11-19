@@ -10,13 +10,20 @@ if vim.fn.has("linux") == 1 and (vim.env.SSH_TTY or vim.env.SSHORE_TTY) then
     vim.g.clipboard = "osc52"
 end
 
-require("remote").setup()
-
 ---------------------------------------------------------------------------
 -- Windows-specific initialization
 ---------------------------------------------------------------------------
 if vim.fn.has("win32") == 1 then
-    require("windows").setup()
+    -- Convert Niubash TMPDIR before native Windows plugins use tempname().
+    if vim.env.TMPDIR then
+        local drive, path = vim.env.TMPDIR:match("^/([A-Za-z])/(.*)$")
+        if drive then
+            vim.env.TMPDIR = drive:upper() .. ":/" .. path
+        end
+    end
+
+    require("ime").setup()
+    require("compile").setup()
 end
 
 ---------------------------------------------------------------------------
@@ -91,9 +98,9 @@ vim.pack.add({
 })
 
 require("cmdline").setup()
+--> :Files, :Oldfiles, :Buffers
 require("picker").setup()
 require("quickfix").setup()
-require("title").setup()
 -- require("git").setup()
 
 vim.opt.showtabline = 0
@@ -105,7 +112,7 @@ vim.keymap.set("n", "<leader>f", ":Files<CR>", { desc = "Find files" })
 vim.keymap.set("n", "<leader>/", ":Grep ", { desc = "Search contents into quickfix" })
 vim.keymap.set("n", "<leader>s", "<Cmd>Symbols<CR>", { desc = "Show Treesitter symbols" })
 vim.keymap.set("n", "<leader>S", "<Cmd>Symbols<CR>", { desc = "Show Treesitter symbols" })
-vim.keymap.set("n", "<leader>o", function() require("buffers").open() end, { desc = "Choose buffer" })
+vim.keymap.set("n", "<leader>o", function() require("picker").open("buffers") end, { desc = "Choose buffer" })
 
 -- Toggle between splits inside windows
 vim.keymap.set("n", "<leader>w", "<C-w>w")

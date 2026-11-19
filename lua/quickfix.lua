@@ -1,5 +1,50 @@
 local M = {}
 local api = vim.api
+local process, generation = nil, 0
+
+local function grep(pattern)
+    if vim.fn.executable("rg") ~= 1 then
+        vim.notify("ripgrep (rg) is not installed", vim.log.levels.ERROR)
+        return
+    end
+    generation = generation + 1
+    local request, cwd = generation, vim.fn.getcwd()
+    if process then process:kill(15) end
+    process = vim.system({ "rg", "--json", "--smart-case", "--", pattern, "." },
+        { cwd = cwd, text = true }, function(result)
+            vim.schedule(function()
+                if request ~= generation then return end
+                process = nil
+                if result.code > 1 then
+                    vim.notify(vim.trim(result.stderr or "rg failed"), vim.log.levels.ERROR)
+                    return
+                end
+                local items = {}
+                for line in (result.stdout or ""):gmatch("[^\n]+") do
+                    local event = vim.json.decode(line)
+                    if event.type == "match" then
+                        local d = event.data
+                        local path = d.path.text or vim.base64.decode(d.path.bytes)
+                        local content = d.lines.text or vim.base64.decode(d.lines.bytes)
+                        for _, match in ipairs(d.submatches) do
+                            items[#items + 1] = {
+                                filename = vim.fs.joinpath(cwd, path),
+                                lnum = d.line_number, col = match.start + 1,
+                                text = content:gsub("[\r\n]+$", ""),
+                            }
+                        end
+                    end
+                end
+                vim.fn.setqflist({}, " ", { title = "rg: " .. pattern, items = items })
+                if #items == 0 then
+                    vim.cmd("cclose")
+                    vim.notify("No matches: " .. pattern)
+                else
+                    vim.cmd("botright copen")
+                end
+            end)
+        end)
+end
 
 local function symbol_text(info)
     local entries = vim.fn.getqflist({ id = info.id, items = 0 }).items
@@ -101,6 +146,12 @@ end
 
 function M.setup()
     local group = api.nvim_create_augroup("PersonalQuickfix", { clear = true })
+    api.nvim_create_user_command("Grep", function(args) grep(args.args) end,
+        { nargs = "+", desc = "Search cwd into quickfix" })
+    api.nvim_create_autocmd("VimLeavePre", { group = group, callback = function()
+        generation = generation + 1
+        if process then process:kill(15) end
+    end })
     api.nvim_create_autocmd("FileType", {
         group = group,
         pattern = "qf",

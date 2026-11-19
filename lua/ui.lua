@@ -17,6 +17,13 @@ function M.style_window(win)
     vim.wo[win].winblend = 0
 end
 
+function M.open_float(buf, enter, config)
+    config.style = "minimal"
+    local win = vim.api.nvim_open_win(buf, enter, config)
+    M.style_window(win)
+    return win
+end
+
 function M.palette()
     local function hl(name) return vim.api.nvim_get_hl(0, { name = name, link = false }) end
     local normal = hl("Normal")
@@ -25,7 +32,6 @@ function M.palette()
         bg = normal.bg,
         accent = hl("Title").fg or hl("DiagnosticInfo").fg or normal.fg,
         muted = hl("Comment").fg or normal.fg,
-        selected = hl("CursorLine").bg or hl("Visual").bg or normal.bg,
     }
 end
 

@@ -2,304 +2,279 @@ local M = {}
 local api = vim.api
 local style = require("ui")
 local active
-local kinds = { "files", "oldfiles" }
-local binaries, search_path = {}, nil
 
--- Prefer Scoop's real binary, avoiding an extra shim process on Windows.
-local function executable(name)
-    if search_path ~= vim.env.PATH then binaries, search_path = {}, vim.env.PATH end
-    if binaries[name] and vim.fn.executable(binaries[name]) == 1 then return binaries[name] end
-    local path = vim.fn.exepath(name)
-    if vim.fn.has("win32") == 1 and path ~= "" then
-        local shim = path:gsub("%.[eE][xX][eE]$", ".shim")
-        if vim.fn.filereadable(shim) == 1 then
-            local target = table.concat(vim.fn.readfile(shim), "\n"):match('path%s*=%s*"([^"]+)"')
-            if target and vim.fn.executable(target) == 1 then path = target end
-        end
-    end
-    assert(path ~= "", "Executable not found: " .. name)
-    binaries[name] = path
-    return path
-end
-
-local function fzf_colors()
-    local p = style.palette()
-    local function color(value) return value and string.format("#%06x", value) or "-1" end
-    local colors = { vim.o.background }
-    for _, pair in ipairs({
-        { "fg", p.fg }, { "bg", p.bg }, { "fg+", p.fg }, { "bg+", p.selected },
-        { "gutter", p.bg }, { "hl", p.accent }, { "hl+", p.accent },
-        { "query", p.fg }, { "prompt", p.fg }, { "pointer", p.accent },
-        { "info", p.muted }, { "spinner", p.muted }, { "border", p.fg },
-    }) do
-        colors[#colors + 1] = pair[1] .. ":" .. color(pair[2])
-    end
-    return table.concat(colors, ",")
-end
-
-local function notify(message, level)
-    vim.notify(message, level or vim.log.levels.INFO, { title = "Pick" })
+local function selected(s)
+    return api.nvim_win_get_cursor(s.win)[1]
 end
 
 local function close(s)
     if s.closed then return end
     s.closed = true
     if active == s then active = nil end
-    if s.job then pcall(vim.fn.jobstop, s.job) end
-    if api.nvim_get_current_win() == s.win then vim.cmd.stopinsert() end
-    if api.nvim_win_is_valid(s.win) then api.nvim_win_close(s.win, true) end
-    if api.nvim_buf_is_valid(s.buf) then api.nvim_buf_delete(s.buf, { force = true }) end
-    vim.fn.delete(s.input)
-    vim.fn.delete(s.output)
+    local win = api.nvim_get_current_win()
+    local restore = win == s.prompt_win or win == s.win
+    if restore then vim.cmd.stopinsert() end
+    if s.job then s.job:kill(15); s.job = nil end
+    if s.group then api.nvim_del_augroup_by_id(s.group) end
+    for _, id in ipairs({ s.prompt_win, s.win }) do
+        if api.nvim_win_is_valid(id) then api.nvim_win_close(id, true) end
+    end
+    if restore and api.nvim_win_is_valid(s.origin) then
+        api.nvim_set_current_win(s.origin)
+    end
 end
 
-local function jump(s, item)
+local function accept(s, index)
+    local item = s.matches[index or selected(s)]
+    if not item then return end
+    close(s)
     if not api.nvim_win_is_valid(s.origin) then return end
     api.nvim_set_current_win(s.origin)
-    -- Structured arguments preserve spaces, #, %, and other filename characters.
-    vim.cmd.edit({ args = { item.filename }, magic = { file = false } })
+    local ok, err
+    if s.kind == "buffers" then
+        if not api.nvim_buf_is_valid(item.bufnr) or not vim.bo[item.bufnr].buflisted then return end
+        ok, err = pcall(api.nvim_win_set_buf, s.origin, item.bufnr)
+    else
+        ok, err = pcall(vim.cmd.edit, { args = { item.filename }, magic = { file = false } })
+    end
+    if not ok then vim.notify(tostring(err), vim.log.levels.ERROR) end
 end
 
-local function select_items(s, items)
-    if s.closed then return end
-    local walker = s.kind == "files"
-    if #items == 0 and not walker then
-        close(s)
-        notify("No results")
-        return
-    end
-    local lines = {}
-    for i, item in ipairs(items) do
-        local name = item.filename
-        local label = vim.fs.relpath(s.cwd, name) or name
-        lines[i] = i .. "\t" .. label:gsub("[%z\1-\31\127]", " ")
-    end
-    if not walker then vim.fn.writefile(lines, s.input) end
-    s.height = walker and 12 or math.min(18, math.max(3, #items + 1))
-    api.nvim_win_set_config(s.win, style.float_config(s.height))
-    -- Only fixed shell syntax and environment paths reach the shell. The query
-    -- goes directly to fzf via its option environment, never through the shell.
-    local flags = ' --layout=reverse --border=none --no-multi'
-        .. ' --no-bold --no-separator --no-scrollbar --info=inline-right --bind=esc:abort --prompt=": "'
-        .. ' --color=' .. fzf_colors()
-    if walker then
-        flags = flags .. ' --walker=file --walker-skip=.git,node_modules --scheme=path --print0'
-    else
-        flags = flags .. ' --delimiter=\\t --with-nth=2..'
-    end
-    local function option(value) return "'" .. value:gsub("'", "'\\''") .. "'" end
-    local opts = "--query=" .. option(s.query)
-    local command
-    if vim.fn.has("win32") == 1 then
-        -- Reopen console stdin so fzf detects a TTY and starts its walker.
-        command = { vim.env.COMSPEC or "cmd.exe", "/d", "/s", "/c",
-            '""%PICK_FZF%"' .. flags .. (walker and ' < CON' or ' < "%PICK_INPUT%"') .. ' > "%PICK_OUTPUT%""' }
-    else
-        command = { "sh", "-c", '"$PICK_FZF"' .. flags .. (walker and '' or ' < "$PICK_INPUT"') .. ' > "$PICK_OUTPUT"' }
-    end
-    api.nvim_buf_set_lines(s.buf, 0, -1, false, {})
-    vim.bo[s.buf].buftype = ""
-    vim.bo[s.buf].modified = false
-    api.nvim_set_current_win(s.win)
-    s.job = vim.fn.jobstart(command, {
-        term = true, cwd = s.cwd,
-        env = { PICK_FZF = s.fzf, PICK_INPUT = s.input, PICK_OUTPUT = s.output,
-            COLORTERM = "truecolor",
-            FZF_DEFAULT_OPTS = opts,
-            FZF_DEFAULT_OPTS_FILE = "", FZF_DEFAULT_COMMAND = "" },
-        on_exit = function(_, code)
-            local function finish()
-                if s.closed then
-                    -- Windows can keep redirected files locked until the job exits.
-                    vim.fn.delete(s.input)
-                    vim.fn.delete(s.output)
-                    return
-                end
-                local file = io.open(s.output, "rb")
-                local output = file and file:read("*a") or ""
-                if file then file:close() end
-                local index = tonumber(output:match("^(%d+)\t"))
-                local item = items[index]
-                if walker and code == 0 then
-                    local path = output:match("^([^%z]+)%z")
-                    if path then item = { filename = vim.fs.normalize(vim.fs.joinpath(s.cwd, path)) } end
-                end
-                s.job = nil
-                close(s)
-                if code == 0 and item then
-                    local ok, err = pcall(jump, s, item)
-                    if not ok then notify(tostring(err), vim.log.levels.ERROR) end
-                elseif code ~= 0 and code ~= 1 and code ~= 130 then
-                    notify("fzf exited with code " .. code, vim.log.levels.ERROR)
-                end
-            end
-            vim.schedule(finish)
-        end,
+local function layout(s)
+    local cfg = style.float_config(math.min(13, math.max(2, #s.matches + 1)))
+    local row = cfg.row
+    cfg.row, cfg.height = row + 3, math.max(1, cfg.height - 1)
+    api.nvim_win_set_config(s.win, cfg)
+    api.nvim_win_set_config(s.prompt_win, {
+        relative = "editor", row = row, col = cfg.col,
+        width = cfg.width, height = 1,
     })
-    if s.job <= 0 then error("Cannot start fzf") end
-    -- Let ConPTY finish a pending resize before a key can terminate fzf.
-    for key, bytes in pairs({ ["<Esc>"] = "\27", ["<CR>"] = "\r", ["<C-c>"] = "\3" }) do
-        vim.keymap.set("t", key, function()
-            local function send()
-                if not s.closed and s.job then vim.fn.chansend(s.job, bytes) end
-            end
-            local delay = (s.resize_deadline or 0) - vim.uv.now()
-            if delay > 0 then vim.defer_fn(send, delay) else send() end
-        end, { buffer = s.buf })
-    end
-    vim.cmd.startinsert()
 end
 
+local function draw(s)
+    if s.closed then return end
+    local lines = {}
+    for _, item in ipairs(s.matches) do
+        if s.kind == "buffers" then
+            lines[#lines + 1] = (item.bufnr == s.current and "> " or "  ")
+                .. string.format("%-" .. s.id_width .. "s  ", tostring(item.bufnr))
+                .. item.label .. (vim.bo[item.bufnr].modified and " [+]" or "")
+        else
+            lines[#lines + 1] = "  " .. item.label
+        end
+    end
+    if #s.matches == 0 then lines[1] = "  No matches" end
+    vim.bo[s.buf].modifiable = true
+    api.nvim_buf_set_lines(s.buf, 0, -1, false, lines)
+    vim.bo[s.buf].modifiable = false
+end
 
-function M.open(kind, query)
-    if active then close(active) end
-    if not vim.tbl_contains(kinds, kind) then notify("Use " .. table.concat(kinds, ", "), vim.log.levels.ERROR); return end
-    local s = { kind = kind, query = query or "", height = 3,
-        origin = api.nvim_get_current_win(),
-        cwd = vim.fn.getcwd(), input = vim.fn.tempname(), output = vim.fn.tempname() }
-    local ok, err = pcall(function()
-        s.fzf = executable("fzf")
-        s.buf = api.nvim_create_buf(false, true)
-        vim.bo[s.buf].bufhidden = "wipe"
-        local cfg = style.float_config(s.height)
-        cfg.style, cfg.title, cfg.title_pos = "minimal", " " .. kind .. " ", "left"
-        s.win = api.nvim_open_win(s.buf, true, cfg)
-        style.style_window(s.win)
-        active = s
-        vim.bo[s.buf].filetype = "picker"
-        api.nvim_buf_set_lines(s.buf, 0, -1, false, { "Loading…  Esc to cancel" })
-        for _, key in ipairs({ "<Esc>", "q" }) do
-            vim.keymap.set("n", key, function() close(s) end, { buffer = s.buf })
-        end
-        api.nvim_create_autocmd("BufWipeout", { buffer = s.buf, once = true,
-            callback = function() vim.schedule(function() close(s) end) end })
-        if kind == "files" then
-            select_items(s, {})
-        elseif kind == "oldfiles" then
-            local items, seen = {}, {}
-            for _, path in ipairs(vim.v.oldfiles) do
-                path = vim.fs.normalize(path)
-                local key = vim.fn.has("win32") == 1 and path:lower() or path
-                if not seen[key] and vim.fn.filereadable(path) == 1 then
-                    seen[key] = true
-                    items[#items + 1] = { filename = path }
-                end
-            end
-            select_items(s, items)
-        end
+local function refresh(s)
+    if s.closed then return end
+    local query = table.concat(api.nvim_buf_get_lines(s.prompt, 0, -1, false), " ")
+    -- Pasted multiline text must not turn the one-line search into an editor.
+    if api.nvim_buf_line_count(s.prompt) > 1 then
+        api.nvim_buf_set_lines(s.prompt, 0, -1, false, { query })
+        api.nvim_win_set_cursor(s.prompt_win, { 1, #query })
+    end
+    if s.kind == "buffers" then
+        s.items = vim.tbl_filter(function(item)
+            return api.nvim_buf_is_valid(item.bufnr) and vim.bo[item.bufnr].buflisted
+        end, s.items)
+    end
+    local id = query:match("^(%d+)$")
+    if query == "" then
+        s.matches = s.items
+    elseif id and s.kind == "buffers" then
+        s.matches = vim.tbl_filter(function(item)
+            return item.bufnr == tonumber(id)
+        end, s.items)
+    else
+        s.matches = vim.fn.matchfuzzy(s.items, query, { key = "label" })
+    end
+    if s.kind ~= "buffers" and #s.matches > 20 then
+        s.matches = vim.list_slice(s.matches, 1, 20)
+    end
+    layout(s)
+    draw(s)
+    api.nvim_win_set_cursor(s.win, { 1, 0 })
+end
+
+local function delete_selected(s)
+    local index = selected(s)
+    local item = s.matches[index]
+    if not item then return end
+    local ok, err = pcall(api.nvim_win_call, s.origin, function()
+        api.nvim_buf_delete(item.bufnr, { force = false })
     end)
     if not ok then
-        if s.win then close(s) end
-        notify(tostring(err), vim.log.levels.ERROR)
-    end
-end
-
-local process, generation = nil, 0
-
--- Parse only leading glob options; leave the remaining regex (including spaces
--- and backslashes) untouched. Use -- to search text starting with an option.
-local function parse_grep(input)
-    local globs, rest = {}, input
-    while true do
-        rest = rest:gsub("^%s+", "")
-        if rest:match("^%-%-%s") then
-            rest = rest:gsub("^%-%-%s+", "", 1)
-            break
-        end
-        local flag, tail = rest:match("^(%S+)%s*(.*)$")
-        if flag ~= "-g" and flag ~= "--glob" then break end
-        local quote = tail:sub(1, 1)
-        local glob
-        if quote == "'" or quote == '"' then
-            local ending = tail:find(quote, 2, true)
-            if not ending then return nil, "Unclosed glob quote" end
-            glob, rest = tail:sub(2, ending - 1), tail:sub(ending + 1)
-            if rest ~= "" and not rest:match("^%s") then
-                return nil, "Expected a space after glob"
-            end
-        else
-            glob, rest = tail:match("^(%S+)%s*(.*)$")
-        end
-        if not glob or glob == "" then return nil, "Missing glob after " .. flag end
-        globs[#globs + 1] = glob
-    end
-    if rest == "" then return nil, "Missing search pattern" end
-    return rest, globs
-end
-
-local function grep(pattern, globs)
-    if vim.fn.executable("rg") ~= 1 then
-        vim.notify("ripgrep (rg) is not installed", vim.log.levels.ERROR)
+        vim.notify(tostring(err), vim.log.levels.WARN)
         return
     end
-    generation = generation + 1
-    local request, cwd = generation, vim.fn.getcwd()
-    if process then process:kill(15) end
-    local command = { "rg", "--json", "--smart-case" }
-    for _, glob in ipairs(globs or {}) do
-        vim.list_extend(command, { "--glob", glob })
+    refresh(s)
+    api.nvim_win_set_cursor(s.win, { math.max(1, math.min(index, #s.matches)), 0 })
+end
+
+function M.open(kind, query)
+    kind = kind or "buffers"
+    if active then close(active) end
+    local s = {
+        origin = api.nvim_get_current_win(), current = api.nvim_get_current_buf(),
+        items = {}, matches = {}, id_width = 2, kind = kind,
+    }
+    local infos = kind == "buffers" and vim.fn.getbufinfo({ buflisted = 1 }) or {}
+    -- Keep positions stable when switching files or reopening the picker.
+    table.sort(infos, function(a, b)
+        return a.bufnr < b.bufnr
+    end)
+    for _, info in ipairs(infos) do
+        s.id_width = math.max(s.id_width, #tostring(info.bufnr))
+        local label = info.name == "" and "[No Name]"
+            or vim.fn.fnamemodify(info.name, ":~:.")
+        s.items[#s.items + 1] = {
+            bufnr = info.bufnr, label = label:gsub("[%z\1-\31\127]", " "),
+        }
     end
-    vim.list_extend(command, { "--", pattern, "." })
-    process = vim.system(command,
-        { cwd = cwd, text = true }, function(result)
-            vim.schedule(function()
-                if request ~= generation then return end
-                process = nil
-                if result.code > 1 then
-                    vim.notify(vim.trim(result.stderr or "rg failed"), vim.log.levels.ERROR)
-                    return
-                end
-                local items = {}
-                for line in (result.stdout or ""):gmatch("[^\n]+") do
-                    local event = vim.json.decode(line)
-                    if event.type == "match" then
-                        local d = event.data
-                        local path = d.path.text or vim.base64.decode(d.path.bytes)
-                        local content = d.lines.text or vim.base64.decode(d.lines.bytes)
-                        for _, match in ipairs(d.submatches) do
-                            items[#items + 1] = {
-                                filename = vim.fs.joinpath(cwd, path),
-                                lnum = d.line_number, col = match.start + 1,
-                                text = content:gsub("[\r\n]+$", ""),
-                            }
-                        end
-                    end
-                end
-                vim.fn.setqflist({}, " ", { title = "rg: " .. pattern, items = items })
-                if #items == 0 then
-                    vim.cmd("cclose")
-                    vim.notify("No matches: " .. pattern)
-                else
-                    vim.cmd("botright copen")
-                end
-            end)
+    s.matches = s.items
+    s.buf = api.nvim_create_buf(false, true)
+    s.prompt = api.nvim_create_buf(false, true)
+    for _, buf in ipairs({ s.buf, s.prompt }) do
+        vim.bo[buf].bufhidden = "wipe"
+        vim.bo[buf].swapfile = false
+        vim.b[buf].completion = false
+        vim.bo[buf].filetype = "bufferpicker"
+    end
+    local cfg = style.float_config(math.min(13, math.max(2, #s.items + 1)))
+    s.win = style.open_float(s.buf, true, cfg)
+    s.prompt_win = style.open_float(s.prompt, false, {
+        relative = "editor", row = cfg.row, col = cfg.col,
+        width = cfg.width, height = 1, border = "rounded",
+        title = " " .. kind:gsub("^%l", string.upper) .. " ", title_pos = "left",
+    })
+    active = s
+    for _, win in ipairs({ s.win, s.prompt_win }) do
+        vim.wo[win].wrap = false
+        vim.wo[win].scrolloff = 0
+        vim.wo[win].sidescrolloff = 0
+    end
+    vim.wo[s.win].cursorline = true
+    vim.wo[s.win].winhighlight = vim.wo[s.win].winhighlight .. ",CursorLine:PmenuSel"
+    local function move(delta)
+        if #s.matches == 0 then return end
+        api.nvim_win_set_cursor(s.win, {
+            math.max(1, math.min(#s.matches, selected(s) + delta)), 0,
+        })
+    end
+    local function search()
+        api.nvim_set_current_win(s.prompt_win)
+        local query = api.nvim_buf_get_lines(s.prompt, 0, 1, false)[1] or ""
+        api.nvim_win_set_cursor(s.prompt_win, { 1, #query })
+        vim.cmd.startinsert({ bang = true })
+    end
+    for _, buf in ipairs({ s.buf, s.prompt }) do
+        local function map(key, fn, mode)
+            vim.keymap.set(mode or { "n", "i" }, key, fn, { buffer = buf, silent = true })
+        end
+        map("<Esc>", function() close(s) end, "n")
+        map("q", function() close(s) end, "n")
+        if buf == s.buf and kind == "buffers" then map("dd", function() delete_selected(s) end, "n") end
+        -- Use the native mode transition so a following Esc reaches the normal map.
+        map("<Esc>", "<Esc>", "i")
+        for _, key in ipairs({ "/", "i" }) do
+            map(key, function() search() end, "n")
+        end
+        map("<C-c>", function() close(s) end)
+        map("<CR>", function() accept(s) end)
+        map("l", function() accept(s) end, "n")
+        for _, key in ipairs({ "<Down>", "<C-n>" }) do map(key, function() move(1) end) end
+        for _, key in ipairs({ "<Up>", "<C-p>" }) do map(key, function() move(-1) end) end
+        map("<ScrollWheelDown>", function() move(1) end)
+        map("<ScrollWheelUp>", function() move(-1) end)
+        map("<LeftMouse>", function()
+            local mouse = vim.fn.getmousepos()
+            if mouse.winid == s.win and mouse.line >= 1 then
+                local index = mouse.line
+                if index <= #s.matches then accept(s, index) end
+            elseif mouse.winid == s.prompt_win then
+                api.nvim_win_set_cursor(s.prompt_win, { 1, math.min(
+                    math.max(0, mouse.column - 1), #api.nvim_get_current_line()) })
+            end
         end)
+    end
+    s.group = api.nvim_create_augroup("PersonalBuffers", { clear = true })
+    api.nvim_create_autocmd("InsertLeave", {
+        group = s.group, buffer = s.prompt, callback = function()
+            if not s.closed then api.nvim_set_current_win(s.win) end
+        end,
+    })
+    api.nvim_create_autocmd({ "TextChangedI", "TextChanged", "TextChangedP" }, {
+        group = s.group, buffer = s.prompt, callback = function() refresh(s) end,
+    })
+    api.nvim_create_autocmd("VimResized", { group = s.group, callback = function()
+        layout(s)
+        draw(s)
+    end })
+    api.nvim_create_autocmd({ "WinLeave", "WinClosed", "BufWipeout" }, {
+        group = s.group, callback = function()
+            vim.schedule(function()
+                if s.closed then return end
+                local win = api.nvim_get_current_win()
+                if not api.nvim_win_is_valid(s.win) or not api.nvim_win_is_valid(s.prompt_win)
+                    or (win ~= s.win and win ~= s.prompt_win) then close(s) end
+            end)
+        end,
+    })
+    if query and query ~= "" then
+        api.nvim_buf_set_lines(s.prompt, 0, -1, false, { query })
+        refresh(s)
+    end
+    if kind == "files" then
+        local cwd = vim.fn.getcwd()
+        if vim.fn.executable("rg") ~= 1 then
+            vim.notify("ripgrep (rg) is not installed", vim.log.levels.ERROR)
+        else
+            s.job = vim.system({ "rg", "--files", "--hidden", "-g", "!.git", "-g", "!node_modules" },
+                { cwd = cwd, text = true }, function(result)
+                vim.schedule(function()
+                    if s.closed then return end
+                    s.job = nil
+                    if result.code ~= 0 and result.code ~= 1 then
+                        vim.notify(vim.trim(result.stderr or "rg failed"), vim.log.levels.ERROR)
+                        return
+                    end
+                    for path in (result.stdout or ""):gmatch("[^\r\n]+") do
+                        s.items[#s.items + 1] = {
+                            filename = vim.fs.joinpath(cwd, path),
+                            label = path:gsub("[%z\1-\31\127]", " "),
+                        }
+                    end
+                    refresh(s)
+                end)
+            end)
+        end
+    end
+    layout(s)
+    draw(s)
+    for index, item in ipairs(s.matches) do
+        if item.bufnr == s.current then
+            api.nvim_win_set_cursor(s.win, { index, 0 })
+            break
+        end
+    end
+    vim.cmd.stopinsert()
 end
 
 
 function M.setup()
-    vim.api.nvim_create_user_command("Grep", function(args)
-        local pattern, globs = parse_grep(args.args)
-        if not pattern then vim.notify(globs, vim.log.levels.ERROR); return end
-        grep(pattern, globs)
-    end, { nargs = "+", desc = "Search cwd into quickfix: [-g glob ...] [--] regex" })
-
-    for name, kind in pairs({ Files = "files", Oldfiles = "oldfiles" }) do
+    api.nvim_create_user_command("Oldfiles", "browse oldfiles", { desc = "Browse recent files" })
+    for name, kind in pairs({ Files = "files", Buffers = "buffers" }) do
         api.nvim_create_user_command(name, function(args)
             M.open(kind, args.args)
         end, { nargs = "*", desc = "Choose " .. kind })
     end
     local group = api.nvim_create_augroup("PersonalPicker", { clear = true })
-    api.nvim_create_autocmd("VimResized", { group = group, callback = function()
-        if active and api.nvim_win_is_valid(active.win) then
-            api.nvim_win_set_config(active.win, style.float_config(active.height))
-            if vim.fn.has("win32") == 1 then active.resize_deadline = vim.uv.now() + 200 end
-        end
-    end })
     api.nvim_create_autocmd("VimLeavePre", { group = group, callback = function()
         if active then close(active) end
-        generation = generation + 1
-        if process then process:kill(15) end
     end })
 end
 
