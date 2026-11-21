@@ -76,69 +76,32 @@ local function system_background()
     return status == 0 and value[0] == 1 and "light" or "dark"
 end
 
-local function setup_statusline()
-    local api = vim.api
-    local function set_highlights()
-        local mode = api.nvim_get_hl(0, { name = "StatusLine", link = false })
-        mode.bold = true
-        api.nvim_set_hl(0, "StatusLineMode", mode)
+local function set_highlights()
+    local function hl(name) return vim.api.nvim_get_hl(0, { name = name, link = false }) end
+    local mode = hl("StatusLine")
+    mode.bold = true
+    vim.api.nvim_set_hl(0, "StatusLineMode", mode)
+    vim.api.nvim_set_hl(0, "GitSignsVirtLnum", { link = "LineNr" })
+    vim.api.nvim_set_hl(0, "GitSignsChangeLn", { link = "GitSignsAddLn" })
+
+    for _, name in ipairs({ "MiniFilesNormal", "MiniFilesBorder", "MiniFilesTitle" }) do
+        vim.api.nvim_set_hl(0, name, { link = "Normal" })
     end
+    vim.api.nvim_set_hl(0, "MiniFilesTitleFocused", { link = "Title" })
 
-    vim.o.laststatus = 3
-    vim.o.showmode = false
-    vim.o.statusline = " %#StatusLineMode#%{mode()}%*  %<%f%( %m%r%)%{get(b:, 'minigit_summary_string', '')} (%{len(filter(getbufinfo(), 'v:val.listed'))})%= %y  %l:%v  %p%% "
-    local group = api.nvim_create_augroup("PersonalStatusline", { clear = true })
-    set_highlights()
-    api.nvim_create_autocmd("ColorScheme", {
-        group = group, callback = set_highlights,
-    })
-    local function redraw()
-        vim.schedule(function() vim.cmd.redrawstatus() end)
+    local normal = hl("Normal")
+    local accent = hl("Title").fg or hl("DiagnosticInfo").fg or normal.fg
+    local muted = hl("Comment").fg or normal.fg
+    local function set_hl(name, options)
+        options.bg = normal.bg
+        vim.api.nvim_set_hl(0, name, options)
     end
-    api.nvim_create_autocmd({ "ModeChanged", "BufAdd", "BufDelete" }, {
-        group = group, callback = redraw,
-    })
-    api.nvim_create_autocmd("OptionSet", {
-        group = group, pattern = "buflisted", callback = redraw,
-    })
-end
-
-local function setup_title()
-    -- 保存原始标题配置
-    local original = {
-        title = vim.o.title,
-        titlestring = vim.o.titlestring,
-    }
-
-    local group = vim.api.nvim_create_augroup("BufTitle", {
-        clear = true,
-    })
-
-    local function restore()
-        vim.o.titlestring = original.titlestring
-        vim.o.title = original.title
-    end
-
-    -- 进入 Buffer 或窗口时更新标题
-    vim.api.nvim_create_autocmd({ "BufEnter", "WinEnter" }, {
-        group = group,
-        callback = function()
-            if vim.bo.buftype ~= "" then
-                restore()
-                return
-            end
-
-            vim.o.title = true
-            -- 标题表达式会随 modified 状态更新：未保存时显示 *，保存后消失。
-            vim.o.titlestring = "%t%{&modified ? ' *' : ''}"
-        end,
-    })
-
-    -- 离开窗口时恢复原始标题
-    vim.api.nvim_create_autocmd("WinLeave", {
-        group = group,
-        callback = restore,
-    })
+    set_hl("BlinkCmpMenu", { fg = normal.fg })
+    set_hl("BlinkCmpMenuBorder", { fg = accent })
+    set_hl("BlinkCmpLabel", { fg = normal.fg })
+    set_hl("BlinkCmpLabelMatch", { fg = accent, bold = true })
+    set_hl("BlinkCmpLabelDetail", { fg = muted })
+    set_hl("BlinkCmpLabelDescription", { fg = muted })
 end
 
 function M.setup(config)
@@ -161,9 +124,11 @@ function M.setup(config)
     if theme.module then
         require(theme.module).setup(theme.options)
     end
+    vim.api.nvim_create_autocmd("ColorScheme", {
+        group = vim.api.nvim_create_augroup("PersonalTheme", { clear = true }),
+        callback = set_highlights,
+    })
     vim.cmd.colorscheme(theme.name)
-    setup_statusline()
-    setup_title()
 end
 
 return M

@@ -1,7 +1,22 @@
+-- Keymap reference --------------------------------------------------------
+-- Leader = Space. Leader shortcuts use Normal mode unless noted.
+-- Space f/o       Find files / choose a buffer. Space / searches project text.
+-- Space s or S    List symbols in the current file.
+-- Space e/E       Open MiniFiles / open the working directory in the system file manager.
+-- Space g         Toggle changed files and inline diffs, including deleted lines. n/N jump between hunks.
+-- Space G         Preview the current hunk inline (available after the first Space g).
+-- Space h         Show hover docs. Space l/L shows line diagnostics / toggles the diagnostics list.
+-- Space w         Next window. Space Space returns to the previous buffer.
+-- Space y/d/p     Copy, cut or paste using the system clipboard (Normal and Visual modes).
+-- Ctrl-S saves; F2 opens completion; Ctrl-click opens a file; middle-click centers the cursor.
+-- Picker: / or i to filter, Up/Down to select, Enter to open, Ctrl-C to close. In Buffers, dd deletes.
+-- Quickfix: :cn / :cp for next / previous, q to close. In MiniFiles, L opens the system default app.
+-- Surround: sa adds, sd deletes, sr replaces. Use b for Markdown bold (**text**).
+
+-- Startup and platform settings -------------------------------------------
 -- Set the libuv worker count before any plugin initializes the thread pool.
 vim.env.UV_THREADPOOL_SIZE = "2"
 
--- Use Space as the leader before platform mappings are registered.
 vim.g.mapleader = " "
 vim.g.maplocalleader = " "
 
@@ -10,9 +25,6 @@ if vim.fn.has("linux") == 1 and (vim.env.SSH_TTY or vim.env.SSHORE_TTY) then
     vim.g.clipboard = "osc52"
 end
 
----------------------------------------------------------------------------
--- Windows-specific initialization
----------------------------------------------------------------------------
 if vim.fn.has("win32") == 1 then
     -- Convert Niubash TMPDIR before native Windows plugins use tempname().
     if vim.env.TMPDIR then
@@ -26,9 +38,7 @@ if vim.fn.has("win32") == 1 then
     require("compile").setup()
 end
 
----------------------------------------------------------------------------
--- General configuration
----------------------------------------------------------------------------
+-- Editor settings and mappings --------------------------------------------
 vim.opt.number = false
 vim.opt.statuscolumn =
     "%s%=%{v:lnum == line('.') || v:lnum % 10 == 0 ? v:lnum : ''}   "
@@ -41,7 +51,6 @@ vim.opt.scrolloff = 10
 vim.opt.mousemodel = "extend"
 vim.opt.mouse = "a"
 
--- Disable middle-click paste; center the cursor line in editing modes.
 vim.keymap.set({ "n", "v", "s", "o", "i", "c", "t" }, "<MiddleMouse>", "<Nop>")
 vim.keymap.set({ "n", "x", "i" }, "<MiddleMouse>", "<Cmd>normal! zz<CR>", {
     desc = "Center cursor line",
@@ -50,7 +59,6 @@ vim.keymap.set({ "n", "x", "i" }, "<MiddleMouse>", "<Cmd>normal! zz<CR>", {
 vim.opt.shiftwidth = 4
 vim.opt.expandtab = true
 
--- search
 vim.opt.ignorecase = true
 vim.opt.smartcase = true
 
@@ -61,13 +69,10 @@ vim.keymap.set("n", "<leader>h", vim.lsp.buf.hover, {
     desc = "Show documentation",
 })
 
---> Click + Ctrl to jump to file
 vim.keymap.set("n", "<C-LeftMouse>", "<LeftMouse>gf")
 
---> Use Ctrl+S to save file
 vim.keymap.set({ "n", "i", "x" }, "<C-s>", "<Cmd>write<CR>", { desc = "Save file" })
 
---> Use <leader>y, <leader>p to paste/yank system clipboards
 vim.keymap.set({ "n", "v" }, "<leader>y", [["+y]])
 vim.keymap.set({ "n", "v" }, "<leader>d", [["+d]])
 vim.keymap.set({ "n", "v" }, "<leader>p", [["+p]])
@@ -84,10 +89,7 @@ vim.api.nvim_create_user_command("CopyLocation", function()
     end
 end, { desc = "Copy current file path and line number" })
 
-
--- dark themes: nordbones, github, gruvbox, zenbones, flexoki
--- light themes: github_light, zenwritten_light, patana_light, alabaster, flexoki_light
--- Detect the Windows app theme once at startup.
+-- Theme, interface and navigation -----------------------------------------
 require("theme").setup({
     dark = "gruvbox",
     light = "alabaster",
@@ -97,50 +99,20 @@ vim.pack.add({
     "https://github.com/nvim-mini/mini.surround",
 })
 
-require("cmdline").setup()
---> :Files, :Oldfiles, :Buffers
-require("picker").setup()
-require("quickfix").setup()
--- require("git").setup()
+require("ui").setup()
+require("finder").setup()
 
 vim.opt.showtabline = 0
 
-require("files").setup()
-
---> File picker; grep and symbols use quickfix.
-vim.keymap.set("n", "<leader>f", ":Files<CR>", { desc = "Find files" })
-vim.keymap.set("n", "<leader>/", ":Grep ", { desc = "Search contents into quickfix" })
-vim.keymap.set("n", "<leader>s", "<Cmd>Symbols<CR>", { desc = "Show Treesitter symbols" })
-vim.keymap.set("n", "<leader>S", "<Cmd>Symbols<CR>", { desc = "Show Treesitter symbols" })
-vim.keymap.set("n", "<leader>o", function() require("picker").open("buffers") end, { desc = "Choose buffer" })
-
--- Toggle between splits inside windows
 vim.keymap.set("n", "<leader>w", "<C-w>w")
--- Toggle between alternative buffer
 vim.keymap.set("n", "<leader><leader>", "<cmd>b#<CR>")
 
---> `gc` comment selections
---> `gf` jump to file
---> `gv` select last visual selection
---> `[n]gg / [n]G` jump to #n line
-
---> `==` tab this line
---> `gg=G` tab all fiels
-
---> `gqq` format this line
---> `gq`  format selections
-
---> Completion must load before LSP capabilities are configured.
+-- Language support and editing plugins ------------------------------------
+-- Completion must load before LSP capabilities are configured.
 require("completion").setup()
 
---> Language support: Treesitter and LSP
 require("lsp").setup()
 
---> PlugIn: Mini.Surround
---> `sa` add , with selections
---> `sd` delete, without selection
---> `sr` replace
--->
 require("mini.surround").setup({
     custom_surroundings = {
         b = {
